@@ -156,12 +156,28 @@ async function ensureBrowser({ launchOptions, allowDangerous }: any) {
   previousLaunchOptions = launchOptions;
 
   if (!browser) {
-    const npx_args = { headless: false }
-    const docker_args = { headless: true, args: ["--no-sandbox", "--single-process", "--no-zygote"] }
-    browser = await puppeteer.launch(deepMerge(
-      process.env.DOCKER_CONTAINER ? docker_args : npx_args,
-      mergedConfig
-    ));
+    let wsEndpoint = '';
+    try {
+      const res  = await fetch('http://127.0.0.1:9222/json/version');
+      if (res.ok) {
+        wsEndpoint = (await res.json()).webSocketDebuggerUrl;
+      }
+    } catch { }
+
+    if (wsEndpoint) {
+      browser = await puppeteer.connect({
+        browserWSEndpoint: wsEndpoint,
+        defaultViewport: null
+      });
+    } else {
+      const npx_args = { headless: false }
+      const docker_args = { headless: true, args: ["--no-sandbox", "--single-process", "--no-zygote"] }
+      browser = await puppeteer.launch(deepMerge(
+        process.env.DOCKER_CONTAINER ? docker_args : npx_args,
+        mergedConfig
+      ));
+    }
+
     const pages = await browser.pages();
     page = pages[0];
 
@@ -212,6 +228,8 @@ declare global {
 }
 
 async function handleToolCall(name: string, args: any): Promise<CallToolResult> {
+
+  process.stderr.write("Tool call: " + name + " args: " + JSON.stringify(args, null, 2) + "\n");
   const page = await ensureBrowser(args);
 
   switch (name) {
@@ -226,9 +244,11 @@ async function handleToolCall(name: string, args: any): Promise<CallToolResult> 
       };
 
     case "puppeteer_screenshot": {
-      const width = args.width ?? 800;
-      const height = args.height ?? 600;
-      await page.setViewport({ width, height });
+      const viewPort = (args?.width && args?.height) ? {
+        width: args.width,
+        height: args.height
+      } : null;
+      await page.setViewport(viewPort);
 
       const screenshot = await (args.selector ?
         (await page.$(args.selector))?.screenshot({ encoding: "base64" }) :
@@ -253,7 +273,7 @@ async function handleToolCall(name: string, args: any): Promise<CallToolResult> 
         content: [
           {
             type: "text",
-            text: `Screenshot '${args.name}' taken at ${width}x${height}`,
+            text: `Screenshot '${args.name}' taken` + (viewPort ? ` at ${viewPort.width}x${viewPort.height}` : ""),
           } as TextContent,
           {
             type: "image",
@@ -351,17 +371,19 @@ async function handleToolCall(name: string, args: any): Promise<CallToolResult> 
     case "puppeteer_evaluate":
       try {
         await page.evaluate(() => {
-          window.mcpHelper = {
-            logs: [],
-            originalConsole: { ...console },
-          };
-
-          ['log', 'info', 'warn', 'error'].forEach(method => {
-            (console as any)[method] = (...args: any[]) => {
-              window.mcpHelper.logs.push(`[${method}] ${args.join(' ')}`);
-              (window.mcpHelper.originalConsole as any)[method](...args);
+          if (!window.mcpHelper) {
+            window.mcpHelper = {
+              logs: [],
+              originalConsole: { ...console },
             };
-          });
+          
+            ['log', 'info', 'warn', 'error'].forEach(method => {
+              (console as any)[method] = (...args: any[]) => {
+                window.mcpHelper.logs.push(`[${method}] ${args.join(' ')}`);
+                (window.mcpHelper.originalConsole as any)[method](...args);
+              };
+            });
+          }
         });
 
         const result = await page.evaluate(args.script);
