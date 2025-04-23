@@ -229,7 +229,7 @@ declare global {
 
 async function handleToolCall(name: string, args: any): Promise<CallToolResult> {
 
-  process.stderr.write("Tool call: " + name + " args: " + JSON.stringify(args, null, 2) + "\n");
+  // process.stderr.write("Tool call: " + name + " args: " + JSON.stringify(args, null, 2) + "\n");
   const page = await ensureBrowser(args);
 
   switch (name) {
