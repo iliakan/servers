@@ -96,16 +96,19 @@ async function validatePath(requestedPath: string): Promise<string> {
 
 // Schema definitions
 const ReadFileArgsSchema = z.object({
-  path: z.string(),
+  path: z.string().describe("Absolute path to the file to read"),
 });
 
 const ReadMultipleFilesArgsSchema = z.object({
-  paths: z.array(z.string()),
+  paths: z.array(
+    z.string()
+  ).describe("Absolute paths to the files to read"),
 });
 
 const WriteFileArgsSchema = z.object({
-  path: z.string(),
+  path: z.string().describe("Absolute path to the file to write"),
   content: z.string(),
+  append: z.boolean().describe("If true, then appends to the file, otherwise fully overwrites the content")
 });
 
 const EditOperation = z.object({
@@ -335,7 +338,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
       {
-        name: "read_file",
+        name: "read_file_full",
         description:
           "Read the complete contents of a file from the file system. " +
           "Handles various text encodings and provides detailed error messages " +
@@ -350,90 +353,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           "efficient than reading files one by one when you need to analyze " +
           "or compare multiple files. Each file's content is returned with its " +
           "path as a reference. Failed reads for individual files won't stop " +
-          "the entire operation. Only works within allowed directories.",
+          "the entire operation. Only works within allowed directories. " +
+          "All file paths must be absolute paths.",
         inputSchema: zodToJsonSchema(ReadMultipleFilesArgsSchema) as ToolInput,
       },
       {
         name: "write_file",
         description:
           "Create a new file or completely overwrite an existing file with new content. " +
-          "Use with caution as it will overwrite existing files without warning. " +
           "Handles text content with proper encoding. Only works within allowed directories.",
         inputSchema: zodToJsonSchema(WriteFileArgsSchema) as ToolInput,
-      },
-      {
-        name: "edit_file",
-        description:
-          "Make line-based edits to a text file. Each edit replaces exact line sequences " +
-          "with new content. Returns a git-style diff showing the changes made. " +
-          "Only works within allowed directories.",
-        inputSchema: zodToJsonSchema(EditFileArgsSchema) as ToolInput,
-      },
-      {
-        name: "create_directory",
-        description:
-          "Create a new directory or ensure a directory exists. Can create multiple " +
-          "nested directories in one operation. If the directory already exists, " +
-          "this operation will succeed silently. Perfect for setting up directory " +
-          "structures for projects or ensuring required paths exist. Only works within allowed directories.",
-        inputSchema: zodToJsonSchema(CreateDirectoryArgsSchema) as ToolInput,
-      },
-      {
-        name: "list_directory",
-        description:
-          "Get a detailed listing of all files and directories in a specified path. " +
-          "Results clearly distinguish between files and directories with [FILE] and [DIR] " +
-          "prefixes. This tool is essential for understanding directory structure and " +
-          "finding specific files within a directory. Only works within allowed directories.",
-        inputSchema: zodToJsonSchema(ListDirectoryArgsSchema) as ToolInput,
-      },
-      {
-        name: "directory_tree",
-        description:
-            "Get a recursive tree view of files and directories as a JSON structure. " +
-            "Each entry includes 'name', 'type' (file/directory), and 'children' for directories. " +
-            "Files have no children array, while directories always have a children array (which may be empty). " +
-            "The output is formatted with 2-space indentation for readability. Only works within allowed directories.",
-        inputSchema: zodToJsonSchema(DirectoryTreeArgsSchema) as ToolInput,
-      },
-      {
-        name: "move_file",
-        description:
-          "Move or rename files and directories. Can move files between directories " +
-          "and rename them in a single operation. If the destination exists, the " +
-          "operation will fail. Works across different directories and can be used " +
-          "for simple renaming within the same directory. Both source and destination must be within allowed directories.",
-        inputSchema: zodToJsonSchema(MoveFileArgsSchema) as ToolInput,
-      },
-      {
-        name: "search_files",
-        description:
-          "Recursively search for files and directories matching a pattern. " +
-          "Searches through all subdirectories from the starting path. The search " +
-          "is case-insensitive and matches partial names. Returns full paths to all " +
-          "matching items. Great for finding files when you don't know their exact location. " +
-          "Only searches within allowed directories.",
-        inputSchema: zodToJsonSchema(SearchFilesArgsSchema) as ToolInput,
-      },
-      {
-        name: "get_file_info",
-        description:
-          "Retrieve detailed metadata about a file or directory. Returns comprehensive " +
-          "information including size, creation time, last modified time, permissions, " +
-          "and type. This tool is perfect for understanding file characteristics " +
-          "without reading the actual content. Only works within allowed directories.",
-        inputSchema: zodToJsonSchema(GetFileInfoArgsSchema) as ToolInput,
-      },
-      {
-        name: "list_allowed_directories",
-        description:
-          "Returns the list of directories that this server is allowed to access. " +
-          "Use this to understand which directories are available before trying to access files.",
-        inputSchema: {
-          type: "object",
-          properties: {},
-          required: [],
-        },
       },
     ],
   };
@@ -445,10 +374,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
 
     switch (name) {
-      case "read_file": {
+      case "read_file_full": {
         const parsed = ReadFileArgsSchema.safeParse(args);
         if (!parsed.success) {
-          throw new Error(`Invalid arguments for read_file: ${parsed.error}`);
+          throw new Error(`Invalid arguments for read_file_full: ${parsed.error}`);
         }
         const validPath = await validatePath(parsed.data.path);
         const content = await fs.readFile(validPath, "utf-8");
@@ -485,7 +414,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           throw new Error(`Invalid arguments for write_file: ${parsed.error}`);
         }
         const validPath = await validatePath(parsed.data.path);
-        await fs.writeFile(validPath, parsed.data.content, "utf-8");
+        if (parsed.data.append) {
+          await fs.appendFile(validPath, parsed.data.content, "utf-8");
+        } else {
+          await fs.writeFile(validPath, parsed.data.content, "utf-8");
+        }
         return {
           content: [{ type: "text", text: `Successfully wrote to ${parsed.data.path}` }],
         };
@@ -645,3 +578,4 @@ runServer().catch((error) => {
   console.error("Fatal error running server:", error);
   process.exit(1);
 });
+
